@@ -144,24 +144,28 @@ def extract_fundamental_frequency(y, sr):
         S = np.abs(librosa.stft(y))
         frequencies = librosa.fft_frequencies(sr=sr, n_fft=S.shape[0]*2-2)
         
-        # Get the frequency with maximum magnitude
+        # Get the frequency with maximum magnitude across all frames
         f0_values = []
-        for frame_idx in range(min(S.shape[1], 100)):  # Sample first 100 frames
+        max_frames = min(S.shape[1], 100)  # Sample first 100 frames
+        
+        for frame_idx in range(max_frames):
             frame_mag = S[:, frame_idx]
             if len(frame_mag) > 10 and np.max(frame_mag) > 0:
                 # Find peak frequency (skip DC and very low frequencies)
                 peak_idx = np.argmax(frame_mag[10:]) + 10
-                if peak_idx > 0 and peak_idx < len(frequencies):
+                if 0 < peak_idx < len(frequencies):
                     f0 = frequencies[peak_idx]
                     if 50 < f0 < 500:  # Reasonable voice range
                         f0_values.append(f0)
         
         # Return median f0
-        if f0_values:
-            return float(np.median(f0_values))
+        if len(f0_values) > 0:
+            median_f0 = float(np.median(f0_values))
+            return median_f0 if median_f0 > 0 else 120.0
         else:
             return 120.0
-    except:
+    except Exception as e:
+        print(f"Error in extract_fundamental_frequency: {e}")
         return 120.0
 
 def frequency_to_semitones(f1, f0=120):
@@ -176,92 +180,118 @@ def estimate_speaking_speed(y, sr):
         # Detect onsets (syllables/phonemes)
         onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units='frames')
         
-        # Calculate average time between onsets
+        # Need at least 3 onsets to estimate speed
         if len(onset_frames) > 2:
             # Convert frames to samples
             interval_samples = np.diff(onset_frames)
-            avg_interval_samples = np.mean(interval_samples)
-            avg_interval_time = avg_interval_samples / sr
+            avg_interval_samples = float(np.mean(interval_samples))
             
-            # 150ms is typical syllable duration
-            if avg_interval_time > 0:
-                speed = 0.15 / avg_interval_time
-                return float(np.clip(speed, 0.5, 2.0))
+            if avg_interval_samples > 0:
+                avg_interval_time = avg_interval_samples / sr
+                # 150ms is typical syllable duration
+                if avg_interval_time > 0:
+                    speed = 0.15 / avg_interval_time
+                    return float(np.clip(speed, 0.5, 2.0))
         
         return 1.0
-    except:
+    except Exception as e:
+        print(f"Error in estimate_speaking_speed: {e}")
         return 1.0
 
 @app.route('/api/analyze-voice', methods=['POST'])
 def analyze_voice():
     """Analyze user's voice to get modulation settings"""
+    temp_uploaded = None
+    
     try:
+        # Validate file upload
         if 'audio' not in request.files:
-            return jsonify({'error': 'No audio file provided'}), 400
+            return jsonify({'success': False, 'error': 'No audio file provided'}), 400
         
         file = request.files['audio']
         if file.filename == '':
-            return jsonify({'error': 'No audio file selected'}), 400
+            return jsonify({'success': False, 'error': 'No audio file selected'}), 400
+        
+        print(f"Processing audio file: {file.filename}")
         
         # Get file extension
         file_ext = os.path.splitext(file.filename)[1].lower() or '.wav'
         
-        # Save uploaded file temporarily with proper extension
+        # Save uploaded file temporarily
         temp_uploaded = tempfile.NamedTemporaryFile(suffix=file_ext, delete=False)
         file.save(temp_uploaded.name)
         temp_uploaded.close()
         
+        print(f"Saved to: {temp_uploaded.name}")
+        
+        # Load audio file
+        print("Loading audio with librosa...")
         try:
-            # Try to load audio - librosa handles multiple formats
-            # Use sr=None to preserve original sample rate
-            try:
-                y, sr = librosa.load(temp_uploaded.name, sr=None)
-            except Exception as e:
-                # If librosa fails, it might be a codec issue
-                # Try with a common sr value
-                print(f"Librosa load with sr=None failed: {e}")
-                y, sr = librosa.load(temp_uploaded.name, sr=22050)
-            
-            # Ensure audio is long enough
-            if len(y) < sr * 0.5:  # At least 0.5 seconds
-                return jsonify({'error': 'Audio file too short (minimum 0.5 seconds)'}), 400
-            
-            # Extract fundamental frequency (pitch)
-            f0 = extract_fundamental_frequency(y, sr)
-            pitch_shift = frequency_to_semitones(f0, 120)  # 120 Hz is reference male voice
-            
-            # Estimate speaking speed
-            speed = estimate_speaking_speed(y, sr)
-            
-            # Measure volume
-            volume = np.sqrt(np.mean(y**2))
-            volume_adjustment = 0.8 / volume if volume > 0 else 1.0
-            volume_adjustment = float(np.clip(volume_adjustment, 0.5, 2.0))
-            
-            # Generate recommendations
-            recommendations = {
-                'pitch_shift': int(round(pitch_shift)),
-                'speed': round(speed, 2),
-                'volume': round(volume_adjustment, 2),
-                'analysis': {
-                    'fundamental_frequency': round(f0, 2),
-                    'detected_volume': round(float(volume), 3),
-                    'estimated_speed': round(speed, 2)
-                }
+            y, sr = librosa.load(temp_uploaded.name, sr=None)
+            print(f"Loaded: {len(y)} samples at {sr} Hz")
+        except Exception as load_error:
+            print(f"Librosa load with sr=None failed: {load_error}, trying with sr=22050...")
+            y, sr = librosa.load(temp_uploaded.name, sr=22050)
+            print(f"Loaded with sr=22050: {len(y)} samples")
+        
+        # Validate audio length
+        min_duration = 0.5  # seconds
+        if len(y) < sr * min_duration:
+            return jsonify({'success': False, 'error': f'Audio too short (min {min_duration}s)'}), 400
+        
+        print(f"Audio duration: {len(y) / sr:.2f} seconds")
+        
+        # Extract voice characteristics
+        print("Extracting fundamental frequency...")
+        f0 = extract_fundamental_frequency(y, sr)
+        print(f"F0: {f0:.2f} Hz")
+        
+        pitch_shift = frequency_to_semitones(f0, 120)
+        print(f"Pitch shift: {pitch_shift:.2f} semitones")
+        
+        print("Estimating speaking speed...")
+        speed = estimate_speaking_speed(y, sr)
+        print(f"Speed: {speed:.2f}x")
+        
+        print("Measuring volume...")
+        volume = np.sqrt(np.mean(y**2))
+        print(f"RMS volume: {volume:.4f}")
+        
+        volume_adjustment = 0.8 / volume if volume > 0.001 else 1.0
+        volume_adjustment = float(np.clip(volume_adjustment, 0.5, 2.0))
+        print(f"Volume adjustment: {volume_adjustment:.2f}x")
+        
+        # Create response with verified numeric values
+        recommendations = {
+            'success': True,
+            'pitch_shift': int(round(float(pitch_shift))),
+            'speed': round(float(speed), 2),
+            'volume': round(float(volume_adjustment), 2),
+            'analysis': {
+                'fundamental_frequency': round(float(f0), 2),
+                'detected_volume': round(float(volume), 4),
+                'estimated_speed': round(float(speed), 2)
             }
-            
-            return jsonify(recommendations), 200
-            
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_uploaded.name):
-                os.remove(temp_uploaded.name)
+        }
+        
+        print(f"Recommendations: {recommendations}")
+        return jsonify(recommendations), 200
         
     except Exception as e:
-        print(f"Error analyzing voice: {str(e)}")
+        error_msg = str(e)
+        print(f"Error analyzing voice: {error_msg}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Failed to analyze voice: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': f'Analysis failed: {error_msg}'}), 500
+        
+    finally:
+        # Clean up temp file
+        if temp_uploaded and os.path.exists(temp_uploaded.name):
+            try:
+                os.remove(temp_uploaded.name)
+                print(f"Cleaned up: {temp_uploaded.name}")
+            except Exception as cleanup_error:
+                print(f"Cleanup error: {cleanup_error}")
 
 @app.route('/audio/<filename>')
 def get_audio(filename):

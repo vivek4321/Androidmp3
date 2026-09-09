@@ -542,14 +542,25 @@
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.error || 'Analysis failed');
+                // Always try to parse JSON response
+                let analysis;
+                try {
+                    analysis = await response.json();
+                } catch (jsonError) {
+                    console.error('Failed to parse JSON:', jsonError);
+                    console.error('Response status:', response.status);
+                    throw new Error(`Server error (${response.status}): Invalid response format`);
                 }
 
-                const analysis = await response.json();
+                // Check if analysis was successful
+                if (!analysis.success || analysis.error) {
+                    throw new Error(analysis.error || 'Analysis failed');
+                }
+
                 displayVoiceAnalysis(analysis);
+                showSuccess('✓ Voice analysis complete!');
             } catch (error) {
+                console.error('Voice analysis error:', error);
                 showError(`Voice analysis error: ${error.message}`);
             } finally {
                 uploadVoiceBtn.disabled = false;
@@ -600,15 +611,25 @@
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.error || 'Analysis failed');
+                // Always try to parse JSON response
+                let analysis;
+                try {
+                    analysis = await response.json();
+                } catch (jsonError) {
+                    console.error('Failed to parse JSON:', jsonError);
+                    console.error('Response status:', response.status);
+                    throw new Error(`Server error (${response.status}): Invalid response format`);
                 }
 
-                const analysis = await response.json();
+                // Check if analysis was successful
+                if (!analysis.success || analysis.error) {
+                    throw new Error(analysis.error || 'Analysis failed');
+                }
+
                 displayVoiceAnalysis(analysis);
-                showSuccess('Voice analysis complete!');
+                showSuccess('✓ Voice analysis complete!');
             } catch (error) {
+                console.error('Voice analysis error:', error);
                 showError(`Voice analysis error: ${error.message}`);
             } finally {
                 recordVoiceBtn.disabled = false;
