@@ -10,7 +10,6 @@ import numpy as np
 from scipy import signal
 from werkzeug.utils import secure_filename
 import tempfile
-import os
 
 app = Flask(__name__)
 CORS(app)
@@ -204,14 +203,28 @@ def analyze_voice():
         if file.filename == '':
             return jsonify({'error': 'No audio file selected'}), 400
         
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-            file.save(tmp.name)
-            temp_path = tmp.name
+        # Get file extension
+        file_ext = os.path.splitext(file.filename)[1].lower() or '.wav'
+        
+        # Save uploaded file temporarily with proper extension
+        temp_uploaded = tempfile.NamedTemporaryFile(suffix=file_ext, delete=False)
+        file.save(temp_uploaded.name)
+        temp_uploaded.close()
         
         try:
-            # Load and analyze audio
-            y, sr = librosa.load(temp_path, sr=None)
+            # Try to load audio - librosa handles multiple formats
+            # Use sr=None to preserve original sample rate
+            try:
+                y, sr = librosa.load(temp_uploaded.name, sr=None)
+            except Exception as e:
+                # If librosa fails, it might be a codec issue
+                # Try with a common sr value
+                print(f"Librosa load with sr=None failed: {e}")
+                y, sr = librosa.load(temp_uploaded.name, sr=22050)
+            
+            # Ensure audio is long enough
+            if len(y) < sr * 0.5:  # At least 0.5 seconds
+                return jsonify({'error': 'Audio file too short (minimum 0.5 seconds)'}), 400
             
             # Extract fundamental frequency (pitch)
             f0 = extract_fundamental_frequency(y, sr)
@@ -241,11 +254,13 @@ def analyze_voice():
             
         finally:
             # Clean up temp file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            if os.path.exists(temp_uploaded.name):
+                os.remove(temp_uploaded.name)
         
     except Exception as e:
         print(f"Error analyzing voice: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'Failed to analyze voice: {str(e)}'}), 500
 
 @app.route('/audio/<filename>')
