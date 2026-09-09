@@ -224,15 +224,44 @@ def analyze_voice():
         
         print(f"Saved to: {temp_uploaded.name}")
         
-        # Load audio file
-        print("Loading audio with librosa...")
+        # Load audio file with multiple fallback strategies
+        y = None
+        sr = None
+        
+        # Strategy 1: Try librosa with preserved sample rate
+        print("Attempting librosa load with sr=None...")
         try:
             y, sr = librosa.load(temp_uploaded.name, sr=None)
-            print(f"Loaded: {len(y)} samples at {sr} Hz")
-        except Exception as load_error:
-            print(f"Librosa load with sr=None failed: {load_error}, trying with sr=22050...")
-            y, sr = librosa.load(temp_uploaded.name, sr=22050)
-            print(f"Loaded with sr=22050: {len(y)} samples")
+            print(f"✓ Loaded with librosa sr=None: {len(y)} samples at {sr} Hz")
+        except Exception as e:
+            print(f"✗ Failed with sr=None: {e}")
+            
+            # Strategy 2: Try librosa with standard 22050 Hz
+            print("Attempting librosa load with sr=22050...")
+            try:
+                y, sr = librosa.load(temp_uploaded.name, sr=22050)
+                print(f"✓ Loaded with librosa sr=22050: {len(y)} samples at {sr} Hz")
+            except Exception as e2:
+                print(f"✗ Failed with sr=22050: {e2}")
+                
+                # Strategy 3: Try soundfile directly
+                print("Attempting soundfile.read()...")
+                try:
+                    y, sr = sf.read(temp_uploaded.name)
+                    y = np.asarray(y, dtype=np.float32)
+                    # Convert to mono if stereo
+                    if len(y.shape) > 1:
+                        y = np.mean(y, axis=1)
+                    print(f"✓ Loaded with soundfile: {len(y)} samples at {sr} Hz")
+                except Exception as e3:
+                    print(f"✗ Failed with soundfile: {e3}")
+                    
+                    # All strategies failed
+                    error_msg = f"Unsupported audio format. Try WAV or MP3. (Errors: {str(e)}, {str(e2)}, {str(e3)})"
+                    return jsonify({'success': False, 'error': error_msg}), 400
+        
+        if y is None or sr is None:
+            return jsonify({'success': False, 'error': 'Failed to load audio file'}), 400
         
         # Validate audio length
         min_duration = 0.5  # seconds

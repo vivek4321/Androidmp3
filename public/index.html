@@ -573,7 +573,26 @@
             if (!mediaRecorder) {
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorder = new MediaRecorder(stream);
+                    
+                    // Try to use a compatible MIME type for recording
+                    let mimeType = 'audio/wav';
+                    const supportedMimeTypes = [
+                        'audio/wav',
+                        'audio/webm;codecs=opus',
+                        'audio/webm',
+                        'audio/ogg'
+                    ];
+                    
+                    // Find first supported MIME type
+                    for (const type of supportedMimeTypes) {
+                        if (MediaRecorder.isTypeSupported(type)) {
+                            mimeType = type;
+                            break;
+                        }
+                    }
+                    
+                    console.log(`Recording with MIME type: ${mimeType}`);
+                    mediaRecorder = new MediaRecorder(stream, { mimeType });
                     recordedAudioBlob = null;
 
                     mediaRecorder.ondataavailable = (e) => {
@@ -582,18 +601,22 @@
 
                     mediaRecorder.start();
                     recordVoiceBtn.textContent = '⏹️ Stop Recording';
+                    recordVoiceBtn.disabled = false;
                 } catch (error) {
-                    showError('Microphone access denied');
+                    console.error('Microphone/recording error:', error);
+                    showError('Microphone access denied or recording failed');
                 }
             } else {
                 mediaRecorder.stop();
                 recordVoiceBtn.textContent = '🎙️ Record Voice';
+                recordVoiceBtn.disabled = true;
 
                 setTimeout(() => {
                     if (recordedAudioBlob) {
                         analyzeRecordedVoice(recordedAudioBlob);
                     }
                     mediaRecorder = null;
+                    recordVoiceBtn.disabled = false;
                 }, 500);
             }
         });
@@ -603,8 +626,22 @@
             recordVoiceBtn.textContent = '⏳ Analyzing...';
 
             try {
+                // Determine file extension from MIME type
+                let filename = 'recorded_voice.wav';
+                if (blob.type.includes('wav')) {
+                    filename = 'recorded_voice.wav';
+                } else if (blob.type.includes('webm')) {
+                    filename = 'recorded_voice.webm';
+                } else if (blob.type.includes('ogg')) {
+                    filename = 'recorded_voice.ogg';
+                } else if (blob.type.includes('mp3')) {
+                    filename = 'recorded_voice.mp3';
+                }
+                
+                console.log(`Uploading ${filename} (MIME: ${blob.type})`);
+                
                 const formData = new FormData();
-                formData.append('audio', blob, 'recorded_voice.wav');
+                formData.append('audio', blob, filename);
 
                 const response = await fetch('/api/analyze-voice', {
                     method: 'POST',
